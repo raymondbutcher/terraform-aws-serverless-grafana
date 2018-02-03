@@ -1,0 +1,5 @@
+.envrc
+.terraform
+.vscode
+terraform.tfstate*
+terraform.tfvars
