@@ -4,3 +4,4 @@
 .vscode
 terraform.tfstate*
 terraform.tfvars
+*.zip
