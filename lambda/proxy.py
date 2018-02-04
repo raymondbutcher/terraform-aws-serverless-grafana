@@ -1,6 +1,13 @@
+import re
+
+from base64 import b64decode, b64encode
+
 from botocore.vendored.requests import Session
 from botocore.vendored.requests.adapters import HTTPAdapter
 from botocore.vendored.requests.packages.urllib3.util.retry import Retry
+
+
+URL_PREFIX_RE = re.compile('^/grafana')
 
 
 # Use retries when proxying requests to the Grafana process,
@@ -14,13 +21,37 @@ grafana_session.mount('http://', HTTPAdapter(max_retries=Retry(
 
 def proxy_request(event):
 
-    print('todo: proxy api gateway request event to the grafana server')
-    print(event)
+    url = 'http://127.0.0.1:3000' + URL_PREFIX_RE.sub('', event['path'])
 
-    response = grafana_session.get('http://127.0.0.1:3000/')
+    if event['isBase64Encoded']:
+        request_body = b64decode(event['body'])
+    else:
+        request_body = None
+
+    response = grafana_session.request(
+        method=event['httpMethod'],
+        url=url,
+        data=request_body,
+        headers=event['headers'],
+        allow_redirects=False,
+    )
+
+    if response.encoding:
+        body = response.text
+        is_binary = False
+    else:
+        body = b64encode(response.content).decode('utf-8')
+        is_binary = True
+
+    headers = response.headers
+    headers.pop('transfer-encoding', None)
+    headers['Content-Length'] = len(body)
+
+    print(headers, 'isBase64Encoded:', is_binary)
 
     return {
-        'body': response.content,
-        'headers': response.headers,
-        'status': response.status_code,
+        'body': body,
+        'headers': dict(headers),
+        'statusCode': response.status_code,
+        'isBase64Encoded': is_binary,
     }

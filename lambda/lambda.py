@@ -1,15 +1,20 @@
 from data import lock, download_data, upload_data
-from install import install_grafana
+from install import install_grafana, configure_grafana
 from process import start_grafana, stop_grafana
 from proxy import proxy_request
 
 
 def lambda_handler(event, context):
+    print(event)
 
     # Install Grafana to the /tmp directory if it's not already there.
     # This takes about 15 seconds the first time, but subsequent requests
     # will reuse it .
     install_grafana()
+
+    # Write a configuration file to fix URLs so they're relative
+    # to the API Gateway URLs.
+    configure_grafana(event)
 
     # Lock the data so that only 1 Lambda function can read/write at a time.
     seconds_remaining = int(context.get_remaining_time_in_millis() / 1000)

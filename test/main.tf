@@ -5,5 +5,9 @@ resource "random_id" "name" {
 
 module "grafana" {
   source = "../"
-  name   = "${random_id.name.hex}"
+
+  name = "${var.name}"
+
+  enable_api_gateway_cloudwatch_role = "${var.enable_api_gateway_cloudwatch_role}"
+  enable_api_gateway_logs            = "${var.enable_api_gateway_logs}"
 }
