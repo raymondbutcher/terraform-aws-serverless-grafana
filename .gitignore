@@ -1,6 +1,6 @@
 .direnv
 .envrc
-.terraform
+.terraform*
 .vscode
 terraform.tfstate*
 terraform.tfvars
