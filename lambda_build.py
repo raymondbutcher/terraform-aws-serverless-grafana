@@ -71,6 +71,10 @@ def lambda_handler(event, context):
             print('Cleaning up {}'.format(path))
             shutil.rmtree(path)
 
+    if os.path.exists(BUILD_ZIP):
+        print('Cleaning up {}'.format(BUILD_ZIP))
+        os.remove(BUILD_ZIP)
+
     download_cache_key = 'grafana/' + os.path.basename(GRAFANA_DOWNLOAD_URL)
 
     if not os.path.exists(GRAFANA_DOWNLOAD_PATH):
@@ -117,7 +121,6 @@ def lambda_handler(event, context):
                 except Exception as error:
                     print('ERROR: {}'.format(error))
                     raise
-                
     os.rename(temp_path, BUILD_ZIP)
 
     response = s3_upload(BUILD_ZIP, BUCKET, LAMBDA_ZIP_KEY)
