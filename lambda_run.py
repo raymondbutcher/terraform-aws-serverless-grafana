@@ -23,6 +23,14 @@ root_url = %(protocol)s://%(domain)s:/{stage}/grafana
 [paths]
 data = /tmp/grafana/data
 logs = /tmp/grafana/logs
+
+[auth]
+disable_login_form = true
+disable_signout_menu = true
+
+[auth.anonymous]
+enabled = true
+
 '''.lstrip()
 
 URL_PREFIX_RE = re.compile('^/grafana')

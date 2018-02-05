@@ -34,19 +34,21 @@ def http_download(url, dest):
     with open(temp_path, 'wb') as temp_file:
         response = requests.get(url, stream=True)
         shutil.copyfileobj(response.raw, temp_file)
+    os.rename(temp_path, dest)
 
 
-def s3_download(bucket, key, dest):
+def s3_download(bucket, key, dest, allow_missing=False):
     print('Downloading s3://{}/{}'.format(bucket, key))
     _, temp_path = tempfile.mkstemp()
     try:
         s3.download_file(bucket, key, temp_path)
     except ClientError:
-        print('Could not download from s3://{}/{}'.format(bucket, key))
-        return None
+        if allow_missing:
+            print('Could not download from s3://{}/{}'.format(bucket, key))
+        else:
+            raise
     else:
         os.rename(temp_path, dest)
-        return dest
 
 
 def s3_upload(path, bucket, key):
@@ -72,13 +74,22 @@ def lambda_handler(event, context):
     download_cache_key = 'grafana/' + os.path.basename(GRAFANA_DOWNLOAD_URL)
 
     if not os.path.exists(GRAFANA_DOWNLOAD_PATH):
-        s3_download(BUCKET, download_cache_key, GRAFANA_DOWNLOAD_PATH)
+        s3_download(
+            bucket=BUCKET,
+            key=download_cache_key,
+            dest=GRAFANA_DOWNLOAD_PATH,
+            allow_missing=True,
+        )
 
     if not os.path.exists(GRAFANA_DOWNLOAD_PATH):
         http_download(GRAFANA_DOWNLOAD_URL, GRAFANA_DOWNLOAD_PATH)
         s3_upload(GRAFANA_DOWNLOAD_PATH, BUCKET, download_cache_key)
 
-    s3_download(BUCKET, LAMBDA_SOURCE_KEY, LAMBDA_SOURCE_PATH)
+    s3_download(
+        bucket=BUCKET,
+        key=LAMBDA_SOURCE_KEY,
+        dest=LAMBDA_SOURCE_PATH,
+    )
 
     print('Extracting {}'.format(GRAFANA_DOWNLOAD_PATH))
     os.mkdir(GRAFANA_EXTRACT_DIR)
@@ -101,8 +112,12 @@ def lambda_handler(event, context):
             for file_name in files:
                 absolute_path = os.path.join(root, file_name)
                 relative_path = os.path.relpath(absolute_path, BUILD_DIR)
-                print('Add file', relative_path)
-                zip_file.write(absolute_path, relative_path)
+                try:
+                    zip_file.write(absolute_path, relative_path)
+                except Exception as error:
+                    print('ERROR: {}'.format(error))
+                    raise
+                
     os.rename(temp_path, BUILD_ZIP)
 
     response = s3_upload(BUILD_ZIP, BUCKET, LAMBDA_ZIP_KEY)

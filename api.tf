@@ -41,6 +41,10 @@ resource "aws_api_gateway_integration" "grafana" {
 }
 
 resource "aws_api_gateway_integration_response" "grafana" {
+  depends_on = [
+    "aws_api_gateway_integration.grafana",
+  ]
+
   rest_api_id = "${aws_api_gateway_rest_api.grafana.id}"
   resource_id = "${aws_api_gateway_resource.grafana.id}"
   http_method = "${aws_api_gateway_method.grafana.http_method}"

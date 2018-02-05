@@ -59,8 +59,9 @@ data "aws_iam_policy_document" "lambda_build" {
 
 resource "null_resource" "trigger_build" {
   depends_on = [
-    "module.lambda_build",
     "aws_lambda_function.lambda_run",
+    "aws_s3_bucket_object.lambda_run_source",
+    "module.lambda_build",
   ]
 
   triggers {
