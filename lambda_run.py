@@ -1,16 +1,23 @@
+import boto3
 import os
 import re
 
 from base64 import b64decode, b64encode
 from contextlib import contextmanager
+from math import ceil
 from subprocess import Popen
+from time import sleep, time
 
+from botocore.exceptions import ClientError
 from botocore.vendored.requests import Session
 from botocore.vendored.requests.adapters import HTTPAdapter
 from botocore.vendored.requests.packages.urllib3.util.retry import Retry
 
 
 LAMBDA_BUILD_FUNCTION_NAME = os.environ['LAMBDA_BUILD_FUNCTION_NAME']
+
+LOCK_TABLE_NAME = os.environ['LOCK_TABLE_NAME']
+LOCK_ID = '1'
 
 PATH_PREFIX_RE = re.compile('^/grafana')
 
@@ -47,6 +54,8 @@ requests.mount('http://', HTTPAdapter(max_retries=Retry(
     backoff_factor=0.1,
 )))
 
+dynamodb = boto3.client('dynamodb')
+
 
 @contextmanager
 def lock(context):
@@ -55,12 +64,83 @@ def lock(context):
 
     """
 
-    seconds = int(context.get_remaining_time_in_millis() / 1000)
-    print('todo: dynamodb: acquire lock for {} seconds'.format(seconds))
+    while True:
+
+        now = int(ceil(time()))
+        seconds_remaining = int(ceil(
+            context.get_remaining_time_in_millis() / 1000
+        ))
+        expire = now + seconds_remaining
+
+        print('Acquiring DynamoDB lock')
+        try:
+            response = dynamodb.put_item(
+                TableName=LOCK_TABLE_NAME,
+                Item={
+                    'Id': {
+                        'S': LOCK_ID,
+                    },
+                    'Expire': {
+                        'N': str(expire),
+                    },
+                },
+                ConditionExpression='attribute_not_exists(Id) OR :Now > Expire',
+                ExpressionAttributeValues={
+                    ':Now': {
+                        'N': str(now),
+                    },
+                },
+            )
+        except ClientError as error:
+            code = error.response['Error']['Code']
+            if code == 'ConditionalCheckFailedException':
+                print('Waiting for lock')
+                sleep(0.1)
+            elif code == 'ProvisionedThroughputExceededException':
+                print('Waiting for throttle')
+                sleep(0.2)
+            else:
+                raise
+        else:
+            if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+                raise Exception('ERROR: {}'.format(response))
+            else:
+                break
+
     try:
         yield
     finally:
-        print('todo: dynamodb: release lock')
+
+        attempts = 5
+        while True:
+
+            print('Releasing DynamoDB lock')
+            try:
+                response = dynamodb.delete_item(
+                    TableName=LOCK_TABLE_NAME,
+                    Key={
+                        'Id': {
+                            'S': LOCK_ID,
+                        },
+                    },
+                )
+            except ClientError as error:
+                code = error.response['Error']['Code']
+                if code == 'ProvisionedThroughputExceededException':
+                    print('Waiting for throttle')
+                    sleep(0.2)
+                else:
+                    raise
+            else:
+                if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+                    if attempts:
+                        print('WARNING: {}'.format(response))
+                        attempts -= 1
+                        sleep(0.2)
+                    else:
+                        raise Exception('ERROR: {}'.format(response))
+                else:
+                    break
 
 
 def proxy_request(path, event):
@@ -88,8 +168,8 @@ def proxy_request(path, event):
         is_binary = True
 
     headers = response.headers
+    headers.pop('content-length', None)
     headers.pop('transfer-encoding', None)
-    headers['Content-Length'] = len(body)
 
     print(headers, 'isBase64Encoded:', is_binary)
 

@@ -12,6 +12,7 @@ resource "aws_lambda_function" "lambda_run" {
   environment {
     variables {
       LAMBDA_BUILD_FUNCTION_NAME = "${module.lambda_build.function_name}"
+      LOCK_TABLE_NAME            = "${aws_dynamodb_table.lock.id}"
     }
   }
 }
@@ -35,9 +36,9 @@ resource "aws_iam_role" "lambda_run" {
   assume_role_policy = "${data.aws_iam_policy_document.lambda_run_assume_role.json}"
 }
 
-# Attach a policy for logs.
+data "aws_iam_policy_document" "lambda_run" {
+  # Logs
 
-data "aws_iam_policy_document" "lambda_run_logs" {
   statement {
     effect = "Allow"
 
@@ -62,22 +63,9 @@ data "aws_iam_policy_document" "lambda_run_logs" {
       "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.lambda_run.function_name}:*",
     ]
   }
-}
 
-resource "aws_iam_policy" "lambda_run_logs" {
-  name   = "${var.name}-logs"
-  policy = "${data.aws_iam_policy_document.lambda_run_logs.json}"
-}
+  # S3 bucket
 
-resource "aws_iam_policy_attachment" "lambda_run_logs" {
-  name       = "${var.name}-logs"
-  roles      = ["${aws_iam_role.lambda_run.name}"]
-  policy_arn = "${aws_iam_policy.lambda_run_logs.arn}"
-}
-
-# Attach a policy for S3 bucket access.
-
-data "aws_iam_policy_document" "lambda_run_s3" {
   statement {
     effect = "Allow"
 
@@ -90,15 +78,30 @@ data "aws_iam_policy_document" "lambda_run_s3" {
       "${aws_s3_bucket.bucket.arn}/*",
     ]
   }
+
+  # DynamoDB lock table
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+    ]
+
+    resources = [
+      "${aws_dynamodb_table.lock.arn}",
+    ]
+  }
 }
 
-resource "aws_iam_policy" "lambda_run_s3" {
-  name   = "${var.name}-s3"
-  policy = "${data.aws_iam_policy_document.lambda_run_s3.json}"
+resource "aws_iam_policy" "lambda_run" {
+  name   = "${var.name}"
+  policy = "${data.aws_iam_policy_document.lambda_run.json}"
 }
 
-resource "aws_iam_policy_attachment" "lambda_run_s3" {
-  name       = "${var.name}-s3"
+resource "aws_iam_policy_attachment" "lambda_run" {
+  name       = "${var.name}"
   roles      = ["${aws_iam_role.lambda_run.name}"]
-  policy_arn = "${aws_iam_policy.lambda_run_s3.arn}"
+  policy_arn = "${aws_iam_policy.lambda_run.arn}"
 }

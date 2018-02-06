@@ -120,6 +120,7 @@ def lambda_handler(event, context):
                     zip_file.write(absolute_path, relative_path)
                 except Exception as error:
                     print('ERROR: {}'.format(error))
+                    subprocess.check_call(('find', '/tmp/'))
                     raise
     os.rename(temp_path, BUILD_ZIP)
 
