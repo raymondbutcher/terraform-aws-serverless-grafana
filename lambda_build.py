@@ -1,4 +1,5 @@
 import boto3
+import io
 import os
 import shutil
 import subprocess
@@ -22,6 +23,9 @@ LAMBDA_ZIP_KEY = os.environ['LAMBDA_ZIP_KEY']
 
 GRAFANA_DOWNLOAD_URL = os.environ['GRAFANA_DOWNLOAD_URL']
 GRAFANA_DOWNLOAD_PATH = '/tmp/grafana.tar.gz'
+GRAFANA_DOWNLOAD_CACHE_KEY = 'grafana/' + os.path.basename(
+    GRAFANA_DOWNLOAD_URL
+)
 GRAFANA_EXTRACT_DIR = '/tmp/grafana'
 
 aws_lambda = boto3.client('lambda')
@@ -51,14 +55,13 @@ def s3_download(bucket, key, dest, allow_missing=False):
         os.rename(temp_path, dest)
 
 
-def s3_upload(path, bucket, key):
+def s3_upload(bucket, key, body):
     print('Uploading s3://{}/{}'.format(bucket, key))
-    with open(path, 'rb') as open_file:
-        response = s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=open_file,
-        )
+    response = s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=body,
+    )
     if response['ResponseMetadata']['HTTPStatusCode'] != 200:
         raise Exception('ERROR: {}'.format(response))
     return response
@@ -66,28 +69,31 @@ def s3_upload(path, bucket, key):
 
 def lambda_handler(event, context):
 
-    for path in (BUILD_DIR, GRAFANA_EXTRACT_DIR):
-        if os.path.exists(path):
+    for name in os.listdir('/tmp'):
+        path = '/tmp/' + name
+        if path != GRAFANA_DOWNLOAD_PATH:
             print('Cleaning up {}'.format(path))
-            shutil.rmtree(path)
-
-    if os.path.exists(BUILD_ZIP):
-        print('Cleaning up {}'.format(BUILD_ZIP))
-        os.remove(BUILD_ZIP)
-
-    download_cache_key = 'grafana/' + os.path.basename(GRAFANA_DOWNLOAD_URL)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
 
     if not os.path.exists(GRAFANA_DOWNLOAD_PATH):
         s3_download(
             bucket=BUCKET,
-            key=download_cache_key,
+            key=GRAFANA_DOWNLOAD_CACHE_KEY,
             dest=GRAFANA_DOWNLOAD_PATH,
             allow_missing=True,
         )
 
     if not os.path.exists(GRAFANA_DOWNLOAD_PATH):
         http_download(GRAFANA_DOWNLOAD_URL, GRAFANA_DOWNLOAD_PATH)
-        s3_upload(GRAFANA_DOWNLOAD_PATH, BUCKET, download_cache_key)
+        with open(GRAFANA_DOWNLOAD_PATH, 'rb') as body:
+            s3_upload(
+                bucket=BUCKET,
+                key=GRAFANA_DOWNLOAD_CACHE_KEY,
+                body=body,
+            )
 
     s3_download(
         bucket=BUCKET,
@@ -109,23 +115,29 @@ def lambda_handler(event, context):
     os.rename(LAMBDA_SOURCE_PATH, os.path.join(BUILD_DIR, LAMBDA_SOURCE_NAME))
     os.rename(GRAFANA_EXTRACT_DIR, os.path.join(BUILD_DIR, 'grafana'))
 
-    print('Zipping {}'.format(BUILD_DIR))
-    _, temp_path = tempfile.mkstemp()
-    with zipfile.ZipFile(temp_path, 'w') as zip_file:
-        for root, sub_dirs, files in os.walk(BUILD_DIR):
-            for file_name in files:
-                absolute_path = os.path.join(root, file_name)
-                relative_path = os.path.relpath(absolute_path, BUILD_DIR)
-                try:
-                    zip_file.write(absolute_path, relative_path)
-                except Exception as error:
-                    print('ERROR: {}'.format(error))
-                    subprocess.check_call(('find', '/tmp/'))
-                    raise
-    os.rename(temp_path, BUILD_ZIP)
+    with io.BytesIO() as zip_buffer:
 
-    response = s3_upload(BUILD_ZIP, BUCKET, LAMBDA_ZIP_KEY)
-    version = response['VersionId']
+        print('Zipping {}'.format(BUILD_DIR))
+        with zipfile.ZipFile(zip_buffer, 'a') as zip_file:
+            for root, sub_dirs, files in os.walk(BUILD_DIR):
+                for file_name in files:
+                    absolute_path = os.path.join(root, file_name)
+                    relative_path = os.path.relpath(absolute_path, BUILD_DIR)
+                    try:
+                        zip_file.write(absolute_path, relative_path)
+                    except Exception as error:
+                        print('ERROR: {}'.format(error))
+                        subprocess.check_call(('find', '/tmp/'))
+                        raise
+
+        zip_buffer.seek(0)
+
+        response = s3_upload(
+            bucket=BUCKET,
+            key=LAMBDA_ZIP_KEY,
+            body=zip_buffer,
+        )
+        version = response['VersionId']
 
     print('Updating Lambda Function {}'.format(LAMBDA_FUNCTION_NAME))
     response = aws_lambda.update_function_code(
