@@ -11,8 +11,10 @@ resource "aws_lambda_function" "lambda_run" {
 
   environment {
     variables {
-      LAMBDA_BUILD_FUNCTION_NAME = "${module.lambda_build.function_name}"
-      LOCK_TABLE_NAME            = "${aws_dynamodb_table.lock.id}"
+      FILES_BUCKET = "${aws_s3_bucket.bucket.id}"
+      FILES_PREFIX = "files"
+      FILES_TABLE  = "${aws_dynamodb_table.files.id}"
+      LOCK_TABLE   = "${aws_dynamodb_table.lock.id}"
     }
   }
 }
@@ -91,6 +93,22 @@ data "aws_iam_policy_document" "lambda_run" {
 
     resources = [
       "${aws_dynamodb_table.lock.arn}",
+    ]
+  }
+
+  # DynamoDB files table
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+    ]
+
+    resources = [
+      "${aws_dynamodb_table.files.arn}",
     ]
   }
 }
