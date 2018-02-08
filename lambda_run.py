@@ -1,4 +1,5 @@
 import boto3
+import itertools
 import json
 import os
 import re
@@ -10,9 +11,8 @@ from subprocess import Popen
 from time import sleep, time
 
 from botocore.exceptions import ClientError
-from botocore.vendored.requests import Session
-from botocore.vendored.requests.adapters import HTTPAdapter
-from botocore.vendored.requests.packages.urllib3.util.retry import Retry
+from botocore.vendored.requests.packages import urllib3
+from botocore.vendored.requests.utils import get_encoding_from_headers
 
 
 FILES_BUCKET = os.environ['FILES_BUCKET']
@@ -45,11 +45,11 @@ GRAFANA_PROCESS = None
 
 # Use retries when proxying requests to the Grafana process,
 # because it can take a moment for it to start listening.
-requests = Session()
-requests.mount('http://', HTTPAdapter(max_retries=Retry(
+http = urllib3.PoolManager()
+retry_settings = urllib3.Retry(
     connect=20,
     backoff_factor=0.1,
-)))
+)
 
 dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
@@ -244,31 +244,43 @@ def proxy_request(path, event):
     else:
         request_body = None
 
-    response = requests.request(
+    response = http.request(
         method=event['httpMethod'],
         url=url,
-        data=request_body,
         headers=event['headers'],
-        allow_redirects=False,
+        body=request_body,
+        redirect=False,
+        retries=retry_settings,
     )
 
-    headers = response.headers
-    headers.pop('content-length', None)
-    headers.pop('transfer-encoding', None)
+    headers = {}
+    response.headers.discard('Content-Length')
+    response.headers.discard('Transfer-Encoding')
+    for key in response.headers:
+        # The Set-Cookie header appears multiple times. Use a mix of uppercase
+        # and lowercase to allow multiple headers in the same dictionary.
+        unique_keys = map(
+            ''.join,
+            itertools.product(*zip(key.lower(), key.upper()))
+        )
+        values = response.headers.getlist(key)
+        for key, value in zip(unique_keys, values):
+            headers[key] = value
 
-    if response.encoding:
-        body = response.text
+    encoding = get_encoding_from_headers(response.headers)
+    if encoding:
+        body = response.data.decode(encoding)
         is_binary = False
         print('Text response:', headers)
     else:
-        body = b64encode(response.content).decode('utf-8')
+        body = b64encode(response.data).decode('utf-8')
         is_binary = True
         print('Base 64 encoded response:', headers)
 
     return {
         'body': body,
         'headers': dict(headers),
-        'statusCode': response.status_code,
+        'statusCode': response.status,
         'isBase64Encoded': is_binary,
     }
 
